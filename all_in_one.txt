@@ -1,0 +1,134 @@
+Install R  (http or https?)
+source("http://bioconductor.org/biocLite.R")
+biocLite()
+
+Install genefilter
+biocLite("genefilter")  //need if using filterfun and genefilter
+
+//load genefilter
+library(genefilter)  
+
+
+
+--------------------------------------- FILTER FUNCTIONS -------------------------------------------------
+
+ccFloor <- function(x, floor=20)
+{	x[x < floor] <- floor
+	return (x)
+}
+
+ccCeiling <- function(x, ceiling=20000)
+{	x[x > ceiling] <- ceiling
+	return (x)
+}
+
+#min.fold.change: Minimum fold change for filter (default = 3)
+#num.outliers.to.exclude: Number of experiments to exclude (max & min) before applying variation filter (default = 0)
+minChange <- function(x, exclude=2, threshold=3)
+{	size <- length(x)
+	sortedList <- sort(x)
+	min <- sortedList[1+exclude]
+	max <- sortedList[size-exclude]
+		
+	return (max/min >= threshold)
+}
+
+#min.delta: Minimum delta for filter (default = 100)
+minDelta <- function(x, exclude=2, threshold=100)
+{	size <- length(x)
+	sortedList <- sort(x)
+	min <- sortedList[1+exclude]
+	max <- sortedList[size-exclude]
+		
+	return (max - min >= threshold)
+}
+
+
+
+--------------------------------------- PERFORM FILTERING -------------------------------------------------
+
+eset = read.table("~/Desktop/MVSU Classes/Theses/GSE28702.txt", sep="\t", header=T, stringsAsFactors=F)
+View(eset)
+dim(eset)  # 54613    84
+row.names(eset) = eset$X  #column that contains gene info
+eset = eset[,2:84]
+
+eset = ccFloor(eset)
+eset = ccCeiling(eset)
+
+ff = filterfun(minDelta, minChange, pOverA(0.25, 100))
+selectedGenes = genefilter(eset, ff)
+sum(selectedGenes)   #16814
+
+eset.filtered = eset[selectedGenes, ]
+#eset.filtered.log2 = log2(eset.filtered)
+eset = log2(eset.filtered)
+
+
+
+------------------------------------------ FIND DEGs USING T-TEST ----------------------------------------------
+
+train 
+	1:27 (responder)
+	28:54  (non-responder)
+test
+	55:69 (responder)
+	70:83	(non-responder)
+	
+	
+eset.class = c(rep("responder", 27), rep("non_responder", 27), rep("responder", 15), rep("non_responder", 14))
+
+f = function(x)
+{	responder = x[eset.class=="responder"]
+	non_responder = x[eset.class=="non_responder"]
+	p = t.test(responder, non_responder, var.equal=FALSE, paired=FALSE)$p.value	 #alternative="two.sided"  (default)
+	foldChange = mean(responder) - mean(non_responder)
+	c(foldChange, p)
+}
+
+
+results_ttest = t(apply(eset,1,f))
+rownames(results_ttest) = rownames(eset)
+colnames(results_ttest) = c("logFC", "p")
+
+adjP_ttest = p.adjust(results_ttest[, 2], method = "fdr")  #BH and fdr are the same
+ttestDEGs = cbind(results_ttest, adjP_ttest)
+
+#ttestDEGsOrderAdjP = ttestDEGs[order(ttestDEGs[,3]), ] # order by adjusted-p (3rd column)
+
+esetDEGs = cbind(ttestDEGs, eset)
+esetDEGsOrderAdjP = esetDEGs[order(esetDEGs[,3]), ] # order by adjusted-p (3rd column)
+
+sigGenes = t(esetDEGsOrderAdjP[1:42, 4:83])
+write.table(sigGenes, file = "crc.sigGenes.csv", sep = ",", quote = FALSE, col.names = NA, row.names = TRUE)
+
+
+
+------------------------------------------ CLASSIFICATION USING RANDOM FORESTS ----------------------------------------------
+
+install.packages("randomForest")
+library(randomForest)
+
+
+1. read in data
+   crc = read.table("crc.sigGenes.csv", header = TRUE, sep = ",")
+
+2. alternative method
+	x = crc[ , 1:9] 
+	y = crc[ , 10]
+	rf = randomForest( x, y, importance = TRUE)
+	importance(rf)
+
+4. perform classification
+
+	crc.train = crc[1:54, ]
+	crc.test = crc[55:83, ]
+	
+	#rf = randomForest(crc.train, crc.test, importance = TRUE)
+	rf = randomForest(class ~ ., data = crc.train)
+	rf.predict = predict(rf, crc.test)
+	
+	tab = table(pred = rf.predict, true = fertility$diagnosis)
+
+
+
